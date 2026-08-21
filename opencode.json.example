@@ -1,0 +1,28 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "omlx": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "http://localhost:8000/v1"
+      },
+      "models": {
+        "Qwen3.8-27B-8bit": {
+          "name": "Qwen3.8-27B (quality lane, MTP speculative decoding)",
+          "options": {
+            "draftModel": "Qwen3.8-27B-MTP-8bit"
+          }
+        },
+        "fast-lane-small": {
+          "name": "Fast lane (indexing / planning drafts / compaction)"
+        }
+      }
+    }
+  },
+  "agent": {
+    "build": { "model": "omlx/Qwen3.8-27B-8bit" },
+    "plan": { "model": "omlx/Qwen3.8-27B-8bit" }
+  },
+  "_comment_omlx_model_settings": "Register both models in oMLX's admin dashboard (typically http://localhost:8000/admin) or model_settings.json, matching the exact field names your installed oMLX version expects. Keep turboquant_kv_enabled and dflash_enabled OFF to start — see docs/omlx-qwen-setup.md.",
+  "_comment_env": "context_status.py reads OMLX_BASE_URL and OMLX_QUALITY_MODEL env vars (see .opencode/command/context-status.md) — set these in your shell profile to match the values above."
+}

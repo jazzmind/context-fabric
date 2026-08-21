@@ -1,0 +1,15 @@
+{
+  "name": "context-fabric",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cache-native agent runtime policy layer: OpenCode plugin + context-pack scripts for a local oMLX/Qwen setup.",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "latest",
+    "typescript": "^5.5.0",
+    "@types/node": "^20.0.0"
+  }
+}

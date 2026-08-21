@@ -1,0 +1,15 @@
+# Generated state — this is the whole point of the design (named, versioned, but not
+# meant to be committed wholesale; commit specific packs deliberately if you want history).
+.context-fabric/graph.json
+.context-fabric/summaries/
+.context-fabric/prefixes/
+.context-fabric/session-log/
+.context-fabric/logs/
+.context-fabric/packs/*.yaml
+.context-fabric/history/
+
+node_modules/
+*.pyc
+__pycache__/
+.venv/
+opencode.json

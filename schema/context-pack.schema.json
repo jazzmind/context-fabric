@@ -1,0 +1,124 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://context-fabric.local/schema/context-pack.schema.json",
+  "title": "context_pack",
+  "description": "A typed, versioned, immutable prefix asset for a cache-native agent task.",
+  "type": "object",
+  "required": ["task", "context_pack", "base", "budget", "execution", "subtasks"],
+  "properties": {
+    "task": {
+      "type": "string",
+      "description": "One-line description of the unit of work this pack exists for."
+    },
+    "context_pack": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*:v[0-9]+$",
+      "description": "Human-readable name and version, e.g. 'approval-flow:v12'."
+    },
+    "prefix_hash": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "description": "Content hash of the assembled immutable prefix. Filled in by context_prime.py; absent on a freshly drafted (not yet primed) pack."
+    },
+    "parent_pack": {
+      "type": ["string", "null"],
+      "description": "The context_pack this one checkpoints forward from, or null if this is v1."
+    },
+    "base": {
+      "type": "object",
+      "description": "The immutable prefix's content, in the fixed order it will be assembled.",
+      "required": ["system_prompt", "tool_contract", "architecture_summary", "dependency_graph", "source_slices", "invariants"],
+      "properties": {
+        "system_prompt": {
+          "type": "string",
+          "description": "Path to the system prompt file used for this pack."
+        },
+        "tool_contract": {
+          "type": "string",
+          "description": "Path to the frozen tool/schema definition used for this pack. Changing this invalidates the prefix."
+        },
+        "architecture_summary": {
+          "type": "string",
+          "description": "Path to a generated project architecture summary (from context_index.py)."
+        },
+        "dependency_graph": {
+          "type": "string",
+          "description": "Path to the relevant slice of .context-fabric/graph.json for this task's code cone."
+        },
+        "source_slices": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path"],
+            "properties": {
+              "path": { "type": "string" },
+              "reason": { "type": "string" },
+              "lines": { "type": "string", "description": "Optional line range, e.g. '1-120'." }
+            }
+          }
+        },
+        "invariants": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Explicit statements the implementation must not violate. Written/validated by the quality-lane model."
+        },
+        "acceptance_tests": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Concrete, checkable tests (paths or descriptions) that define done."
+        },
+        "unknowns": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Ambiguities the fast lane flagged for the quality lane to resolve before finalizing."
+        }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "required": ["prefill_tokens", "reserve_output_tokens"],
+      "properties": {
+        "prefill_tokens": { "type": "integer", "minimum": 0 },
+        "reserve_output_tokens": { "type": "integer", "minimum": 0 },
+        "compaction_threshold_pct": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "default": 70,
+          "description": "Trigger a checkpoint when the append-only tail reaches this % of prefill_tokens."
+        }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "required": ["prefix", "history", "compaction"],
+      "properties": {
+        "prefix": { "const": "immutable" },
+        "history": { "const": "append_only" },
+        "compaction": { "const": "task_checkpoint" }
+      }
+    },
+    "subtasks": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": ["draft", "finalized", "active", "checkpointed", "superseded"],
+      "default": "draft"
+    },
+    "created_at": { "type": "string", "format": "date-time" },
+    "checkpoint": {
+      "type": "object",
+      "description": "Present only on packs produced by /context-checkpoint from a prior pack.",
+      "properties": {
+        "changed_files": { "type": "array", "items": { "type": "string" } },
+        "verified_facts": { "type": "array", "items": { "type": "string" } },
+        "failed_hypotheses": { "type": "array", "items": { "type": "string" } },
+        "test_status": { "type": "string" },
+        "next_decision": { "type": "string" }
+      }
+    }
+  }
+}
