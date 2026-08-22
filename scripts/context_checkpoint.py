@@ -28,6 +28,12 @@ from lib import packs  # noqa: E402
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--pack", required=True, help="Current active pack, e.g. approval-flow:v3")
+    ap.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite the next version's draft even if it already exists with checkpoint "
+        "notes filled in (default: refuse, to avoid silently discarding in-progress work).",
+    )
     args = ap.parse_args()
 
     current = packs.load_pack(args.pack)
@@ -37,6 +43,18 @@ def main() -> int:
         return 1
     name, version = m.group(1), int(m.group(2))
     next_id = f"{name}:v{version + 1}"
+
+    next_path = packs.pack_file_path(next_id)
+    if next_path.exists() and not args.force:
+        existing_next = packs.load_pack(next_id) or {}
+        existing_checkpoint = existing_next.get("checkpoint", {}) or {}
+        has_notes = any(existing_checkpoint.get(k) for k in ("changed_files", "verified_facts", "failed_hypotheses", "test_status", "next_decision"))
+        if has_notes:
+            packs.eprint(
+                f"{next_path} already exists with checkpoint notes filled in — refusing to "
+                "overwrite. Pass --force if you really want to discard them and rescaffold."
+            )
+            return 1
 
     next_pack = {
         "task": current["task"],

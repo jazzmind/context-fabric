@@ -5,7 +5,7 @@ This script does the CHEAP part only: selects a candidate code cone and writes a
 pack. It deliberately does not call any model — per the design, the fast model does
 selection/synthesis and the quality-lane model (Qwen3.8-27B) validates/finalizes invariants,
 acceptance tests, and subtask decomposition. Both of those happen in the OpenCode agent turn
-that follows this script's output (see .opencode/command/context-plan.md).
+that follows this script's output (see .opencode/commands/context-plan.md).
 
 Usage:
     python3 scripts/context_plan.py --task "Add policy-aware approval workflow" \\
@@ -47,7 +47,10 @@ def main() -> int:
         return 1
     graph = json.loads(graph_path.read_text())
 
-    name = args.name or slugify(args.task)
+    # Sanitize --name too, not just the fallback slug: pack_file_path()/PACK_NAME_RE
+    # require a lowercase-hyphen slug, and an unsanitized explicit --name would crash
+    # deep inside save_pack() instead of failing with a clear message here.
+    name = slugify(args.name) if args.name else slugify(args.task)
     version = packs.latest_version(name) + 1
     context_pack_id = f"{name}:v{version}"
 

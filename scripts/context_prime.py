@@ -7,7 +7,7 @@ Assembles, in fixed order (never reordered after this point):
 
 Writes the assembled text + its sha256 to disk, stamps prefix_hash + status:active onto the
 pack file, and (with --emit) prints the assembled prefix to stdout so the
-.opencode/command/context-prime.md template can inject it into the session via `!`command``.
+.opencode/commands/context-prime.md template can inject it into the session via `!`command``.
 
 Refuses to prime a pack whose invariants/acceptance_tests are still empty (i.e. still a raw
 draft) — finalize it first (see context_plan.py's printed next-step).
@@ -144,12 +144,13 @@ def main() -> int:
     path = packs.pack_file_path(pack["context_pack"])
     path.write_text(yaml.safe_dump(pack, sort_keys=False, width=100))
 
-    packs.append_history({"event": "primed", "context_pack": pack["context_pack"], "prefix_hash": prefix_hash, "prefix_tokens_approx": len(prefix_text.split())})
+    tokens_approx = packs.approx_tokens(prefix_text)
+    packs.append_history({"event": "primed", "context_pack": pack["context_pack"], "prefix_hash": prefix_hash, "prefix_tokens_approx": tokens_approx})
 
     packs.eprint(f"Primed {pack['context_pack']}")
     packs.eprint(f"  prefix_hash = {prefix_hash}")
     packs.eprint(f"  prefix file = {prefix_path}")
-    packs.eprint(f"  ~{len(prefix_text.split())} words (rough proxy — check /context-status for real token counts)")
+    packs.eprint(f"  ~{tokens_approx} tokens (word-count proxy × 1.3 — check /context-status for a real usage-based count)")
 
     if args.emit:
         print(prefix_text)

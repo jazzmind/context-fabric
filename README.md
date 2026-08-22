@@ -56,10 +56,10 @@ runtime (this sandbox has no Apple Silicon). Concretely:
 
 ```
 install.sh                           Copies plugin/commands/scripts/schema into an existing project.
-.opencode/plugin/context-fabric.ts   OpenCode plugin: append-only enforcement, prefix
+.opencode/plugins/context-fabric.ts  OpenCode plugin: append-only enforcement, prefix
                                       injection, checkpoint-based compaction, invalidation
                                       detection (tool schema / source slice changes).
-.opencode/command/*.md               The five /context-* commands.
+.opencode/commands/*.md              The five /context-* commands.
 scripts/context_index.py             Builds .context-fabric/graph.json (static code graph).
 scripts/context_plan.py              Drafts a context_pack YAML for a task from the graph.
 scripts/context_prime.py             Assembles + hashes the immutable prefix for a pack.

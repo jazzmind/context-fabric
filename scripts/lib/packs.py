@@ -36,6 +36,14 @@ def now_iso() -> str:
     return datetime.datetime.now().astimezone().isoformat()
 
 
+def approx_tokens(text: str) -> int:
+    """Rough word->token proxy (~1.3 tokens/word for English prose+code) used ONLY
+    until a real usage-based count is available from oMLX (see docs/omlx-qwen-setup.md
+    and lib/omlx_client.py). Never treat this as the real prefill size — /context-status
+    should prefer a live probe's usage field when one is available."""
+    return round(len(text.split()) * 1.3)
+
+
 def load_schema() -> Optional[dict]:
     if not SCHEMA_PATH.exists():
         return None
@@ -80,17 +88,21 @@ def load_pack(context_pack: str) -> dict:
 
 
 def save_pack(pack: dict, *, allow_overwrite_if_unprimed: bool = True) -> Path:
-    """Writes a pack to disk. Refuses to overwrite a pack that already has a
-    prefix_hash (i.e. has been primed) — that would silently break the cache
-    invariant. Use context_checkpoint.py to move forward to a new version instead.
+    """Writes a pack to disk. By default (allow_overwrite_if_unprimed=True), refuses
+    to overwrite only a pack that already has a prefix_hash (i.e. has been primed) —
+    that would silently break the cache invariant. Passing
+    allow_overwrite_if_unprimed=False refuses to overwrite ANY existing pack file,
+    primed or not (used by context_plan.py so a repeated draft doesn't clobber
+    in-progress quality-lane edits). Use context_checkpoint.py to move forward to a
+    new version instead of overwriting either way.
     """
     path = pack_file_path(pack["context_pack"])
     if path.exists():
         existing = yaml.safe_load(path.read_text()) or {}
-        if existing.get("prefix_hash") and not allow_overwrite_if_unprimed:
+        if not allow_overwrite_if_unprimed:
             raise RuntimeError(
-                f"{path} was already primed (prefix_hash set) — refusing to overwrite. "
-                "Checkpoint forward to a new version instead."
+                f"{path} already exists — refusing to overwrite. Delete it first if you "
+                "really want to redraft it, or bump the version and use context_checkpoint.py."
             )
         if existing.get("prefix_hash"):
             raise RuntimeError(

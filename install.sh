@@ -18,9 +18,11 @@ if [ ! -d "$DEST" ]; then
   exit 1
 fi
 
-mkdir -p "$DEST/.opencode/plugin" "$DEST/.opencode/command"
-cp -R "$SRC_DIR/.opencode/plugin/." "$DEST/.opencode/plugin/"
-cp -R "$SRC_DIR/.opencode/command/." "$DEST/.opencode/command/"
+# Plural directory names (plugins/, commands/) are OpenCode's current canonical
+# form; singular is only kept for backwards compatibility on older installs.
+mkdir -p "$DEST/.opencode/plugins" "$DEST/.opencode/commands"
+cp -R "$SRC_DIR/.opencode/plugins/." "$DEST/.opencode/plugins/"
+cp -R "$SRC_DIR/.opencode/commands/." "$DEST/.opencode/commands/"
 mkdir -p "$DEST/scripts"
 cp -R "$SRC_DIR/scripts/." "$DEST/scripts/"
 mkdir -p "$DEST/schema"

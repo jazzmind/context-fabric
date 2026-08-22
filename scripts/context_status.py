@@ -35,7 +35,9 @@ def find_active_pack() -> str | None:
 
 
 def session_log_size(pack_name: str) -> int:
-    """Approx append-only tail size in words, from the plugin's session log, if present."""
+    """Approx append-only tail size in WORDS, from the plugin's session log, if present.
+    Caller must convert to the same token proxy used for prefill_budget before comparing
+    the two (see packs.approx_tokens) -- these are not otherwise the same unit."""
     log_dir = REPO_ROOT / ".context-fabric" / "session-log"
     total = 0
     if not log_dir.exists():
@@ -49,6 +51,17 @@ def session_log_size(pack_name: str) -> int:
             if ev.get("context_pack") == pack_name:
                 total += len(json.dumps(ev.get("content", "")).split())
     return total
+
+
+def last_invalidating_warning(pack_name: str) -> str | None:
+    """Surfaces the most recent plugin-logged warning that mentions this pack, so
+    /context-status's 'Invalidating change' row reflects what the plugin's
+    tool.definition/event hooks actually observed, instead of a static placeholder."""
+    log_path = REPO_ROOT / ".context-fabric" / "logs" / "plugin-warnings.log"
+    if not log_path.exists():
+        return None
+    matching = [line for line in log_path.read_text().splitlines() if pack_name in line]
+    return matching[-1] if matching else None
 
 
 def main() -> int:
@@ -65,24 +78,26 @@ def main() -> int:
 
     pack = packs.load_pack(pack_name)
     prefix_path = REPO_ROOT / ".context-fabric" / "prefixes" / f"{pack_name.replace(':', '-')}.prefix.txt"
-    prefix_words = len(prefix_path.read_text().split()) if prefix_path.exists() else None
-    tail_words = session_log_size(pack_name)
+    prefix_tokens_approx = packs.approx_tokens(prefix_path.read_text()) if prefix_path.exists() else None
+    tail_tokens_approx = round(session_log_size(pack_name) * 1.3)
     budget = pack.get("budget", {})
     prefill_budget = budget.get("prefill_tokens")
     threshold_pct = budget.get("compaction_threshold_pct", 70)
 
+    warning = last_invalidating_warning(pack_name)
+
     row = {
         "Active context pack": pack_name,
-        "Stable prefix": f"~{prefix_words} words (proxy for tokens — see live probe below for real counts)" if prefix_words else "unknown (prefix file missing)",
+        "Stable prefix": f"~{prefix_tokens_approx} tokens (word-count proxy × 1.3 — see live probe below for a real count)" if prefix_tokens_approx else "unknown (prefix file missing)",
         "Cache state": "unknown — run with --base-url/--model for a live probe",
         "Last request reused": "unknown — run with --base-url/--model for a live probe",
         "New tokens prefetched": "unknown — run with --base-url/--model for a live probe",
-        "Current task tail": f"~{tail_words} words appended since priming",
+        "Current task tail": f"~{tail_tokens_approx} tokens appended since priming (same word-count proxy)",
         "Compaction risk": (
-            f"{min(100, round(100 * tail_words / prefill_budget))}% of task budget"
+            f"{min(100, round(100 * tail_tokens_approx / prefill_budget))}% of task budget (both sides approximated the same way — not a real token count)"
             if prefill_budget else "unknown (pack has no budget.prefill_tokens)"
         ),
-        "Invalidating change": "none detected" if pack.get("prefix_hash") else "pack not primed yet",
+        "Invalidating change": warning if warning else ("none detected in plugin warnings log" if pack.get("prefix_hash") else "pack not primed yet"),
     }
 
     if args.base_url and args.model and prefix_path.exists():

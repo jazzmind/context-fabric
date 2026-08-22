@@ -20,10 +20,14 @@ knowledge of this session (not from re-reading the whole history — you were th
 Step 3 — using that checkpoint plus a fresh look at the code graph, re-derive
 `source_slices`, `invariants`, and `acceptance_tests` for the next unit of work (don't
 carry the old pack's forward blindly — that's the "silent degradation" this whole design
-avoids). Then prime it:
+avoids). Then, once you've finished editing the new pack file, run the prime script
+yourself using your own shell/bash tool (do not ask me to run it) — substitute the actual
+new version id, e.g. if the current pack above is `approval-flow:v3`, the checkpoint
+script already scaffolded `approval-flow:v4`, so run:
 
-!`python3 scripts/context_prime.py --pack "$ARGUMENTS"`
+`python3 scripts/context_prime.py --pack approval-flow:v4 --emit`
 
-(That last line is a placeholder — replace `$ARGUMENTS` above with the new version, e.g.
-if the current pack is `approval-flow:v3`, prime `approval-flow:v4`, once you've finished
-step 3.)
+Do not reuse `$ARGUMENTS` verbatim here — that is the OLD pack id from the top of this
+command, and re-priming it will simply be refused as unchanged. This step must run after
+your own turn, not as part of loading this command, since the new version number only
+exists once step 1's script has run.
