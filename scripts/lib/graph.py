@@ -18,6 +18,13 @@ from pathlib import Path
 from typing import Optional
 
 CODE_EXTS = {".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java", ".rb", ".c", ".cpp", ".h", ".hpp"}
+# Non-code artifacts worth graphing too: context-fabric isn't only for software-engineering
+# tasks (see README "Common tasks" section) -- data-analysis notebooks/SQL and business-strategy
+# docs need to be seedable/indexable the same way source files are, even though
+# _extract_imports() will simply find zero import matches in them (harmless: they still get a
+# graph node, churn count, and can be a --seed or show up in keyword ranking).
+DOC_AND_DATA_EXTS = {".md", ".mdx", ".ipynb", ".sql", ".csv", ".txt", ".yaml", ".yml"}
+INDEXABLE_EXTS = CODE_EXTS | DOC_AND_DATA_EXTS
 TEST_HINTS = re.compile(r"(^|/)(tests?|spec|__tests__)(/|$)|\.(test|spec)\.", re.IGNORECASE)
 IGNORE_DIRS = {".git", "node_modules", ".venv", "venv", "dist", "build", "__pycache__", ".context-fabric"}
 
@@ -44,7 +51,7 @@ def _iter_source_files(root: Path):
             continue
         if any(part in IGNORE_DIRS for part in p.parts):
             continue
-        if p.suffix in CODE_EXTS:
+        if p.suffix in INDEXABLE_EXTS:
             yield p
 
 
