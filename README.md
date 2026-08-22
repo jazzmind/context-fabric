@@ -55,24 +55,47 @@ runtime (this sandbox has no Apple Silicon). Concretely:
   `.yaml`/`.yml` files are graphed alongside source files (import extraction just finds zero
   matches in them, which is harmless), so notebooks, data dictionaries, and strategy docs can
   be `--seed`ed and selected the same way code can — see "Common tasks" below.
+- **Auto mode — fully implemented and typechecked, but only exercised via the underlying
+  Python scripts and `tsc --noEmit`, not a live OpenCode session:** `scripts/context_auto.py`
+  (config read/write) is deterministic and directly tested end-to-end. The new `chat.message`
+  plugin hook, the `Part`/`TextPart` shape it constructs, and the `PluginInput["$"]` (Bun
+  shell) calls were all checked against `@opencode-ai/plugin`'s and `@opencode-ai/sdk`'s
+  actual shipped `.d.ts` files (not just docs) and pass `npm run typecheck` with zero errors —
+  but whether OpenCode actually calls `chat.message` with exactly this shape, and whether the
+  injected synthetic note reliably steers the agent the way `AGENTS.md` asks, can only be
+  confirmed on your real OpenCode/oMLX install (no runtime available in this sandbox).
+- **Research lane — fully implemented and tested end-to-end at the config layer, model
+  routing itself unverified without a live install:** `scripts/context_research_lane.py`'s
+  status/local/cloud/off transitions were run against both a fresh `opencode.json.example`
+  and a stand-in `opencode.json`, producing valid JSON with the expected `agent.research`
+  block each time. Whether OpenCode actually resolves `agent.research`'s `model` field the way
+  its docs describe, and whether `@research` mentions or automatic delegation work as
+  documented, needs a real run.
 
 ## Layout
 
 ```
-install.sh                           Copies plugin/commands/scripts/schema into an existing project.
+install.sh                           Copies plugin/commands/scripts/schema into an existing
+                                      project; interactively offers to set up a research lane.
 .opencode/plugins/context-fabric.ts  OpenCode plugin: append-only enforcement, prefix
                                       injection, checkpoint-based compaction, invalidation
-                                      detection (tool schema / source slice changes).
-.opencode/commands/*.md              The five /context-* commands.
+                                      detection (tool schema / source slice changes), and
+                                      auto mode (reindex/plan/checkpoint nudges on chat.message).
+.opencode/commands/*.md              The /context-* commands.
+.opencode/prompts/research-agent.md  System prompt for the optional research-lane subagent.
 scripts/context_index.py             Builds .context-fabric/graph.json (static code graph).
 scripts/context_plan.py              Drafts a context_pack YAML for a task from the graph.
 scripts/context_prime.py             Assembles + hashes the immutable prefix for a pack.
 scripts/context_status.py            Renders the cache/pack status table.
 scripts/context_checkpoint.py        Scaffolds the next pack version at a checkpoint.
+scripts/context_auto.py              Toggles auto mode (.context-fabric/config.json).
+scripts/context_research_lane.py     Toggles the research lane (edits opencode.json's agent block).
 schema/context-pack.schema.json      JSON Schema for context_pack YAML files.
 docs/context-pack-spec.md            Human-readable spec + worked example.
 docs/omlx-qwen-setup.md              Mac setup: oMLX, Qwen3.8-27B, OpenCode wiring.
-.context-fabric/                     Generated state: graph, packs, history, session logs.
+AGENTS.md                            Project-root file (auto-discovered by OpenCode) telling
+                                      the agent to act on [context-fabric:auto] notes itself.
+.context-fabric/                     Generated state: graph, packs, history, session logs, config.
 ```
 
 ## Quick start (once oMLX + OpenCode are installed — see `docs/omlx-qwen-setup.md`)
@@ -83,12 +106,17 @@ tooling for — it isn't meant to be `opencode .`'d on its own.
 ```bash
 git clone <this repo> context-fabric
 ./context-fabric/install.sh ~/path/to/your/project
+# install.sh will interactively ask whether to set up a research lane (none/local/cloud) —
+# see "Research lane (opt-in)" below. Answer 1 (none) if you're not sure yet; change it later.
 cd ~/path/to/your/project
 python3 -m pip install -r scripts/requirements.txt
 npm install @opencode-ai/plugin          # plugin type defs, dev-only
 cp opencode.json.example opencode.json   # point OpenCode at your oMLX endpoint + models
 opencode .
 ```
+
+Auto mode (automatic indexing/planning/priming/checkpointing) is on from first run — see
+"Auto mode (on by default)" below. You can still drive the five commands by hand any time.
 
 Inside OpenCode:
 
@@ -125,6 +153,79 @@ Inside OpenCode:
 | Current task tail | 9,832 tokens |
 | Compaction risk | 61% of task budget |
 | Invalidating change | tool schema changed / source slice changed / none |
+
+## Auto mode (on by default)
+
+You don't have to drive the five commands above by hand. Auto mode is on by default and
+runs two pieces together: a deterministic half (the plugin, on every `chat.message`) and a
+reasoning half (the agent itself, steered by standing instructions in the project's root
+`AGENTS.md`, which OpenCode auto-discovers with no config wiring needed).
+
+| Trigger | What the plugin does (deterministic) | What it nudges the agent to do (reasoning) |
+|---|---|---|
+| Every message | Re-runs `/context-index` under the hood, throttled to at most once every 15s | Nothing — this one is silent unless it fails |
+| First substantial message in a new session | Drafts a pack from the code graph (`context_plan.py`) | Finalize `invariants`/`acceptance_tests`, resolve `unknowns`, then run `/context-prime` itself |
+| Right after compaction | Scaffolds the next pack version (`context_checkpoint.py`) | Fill in the new pack's `checkpoint` block from what it just did, re-derive `source_slices`, then re-prime |
+
+Both nudges arrive as an injected note tagged `[context-fabric:auto]` — `AGENTS.md` tells the
+agent to treat these as standing instructions to act on immediately, not as messages to relay
+back to you, and to only pause and ask if something under `unknowns` genuinely needs your input.
+
+Toggle it any time:
+
+```
+/context-auto status
+/context-auto off
+/context-auto on
+```
+
+or for one shell session without touching the config file: `CONTEXT_FABRIC_AUTO=0 opencode .`
+
+**Known limitation:** the "first substantial message" trigger is per-*session*, not
+per-*task* — a second, unrelated task started later in the same long-lived session won't get
+an auto-drafted pack. Start a new session per task (matches the "Common tasks" recipes below),
+or just run `/context-plan` yourself for the second task.
+
+## Research lane (opt-in)
+
+A second, smaller model — local (a second oMLX model loaded alongside the quality lane) or a
+hosted cloud model — that the primary agent can hand tangential, non-sequitur work to: web
+lookups, quick research, anything that isn't the actual coding task. Off by default.
+
+**What it's *not* for:** OpenCode subagents already run in a fully isolated child session with
+no access to the parent conversation history ([OpenCode Agents docs](https://opencode.ai/docs/agents/)),
+so a subagent gets context isolation from your primed pack's cached prefix for free, regardless
+of which model it runs on. You do not need a second model just to keep a lookup out of the
+main context — a subagent on the *same* model already does that.
+
+**What it's actually for:** resource isolation and cost/privacy tradeoffs.
+- **Local:** oMLX serves multiple models from one process with an LRU-evicted, capped memory
+  budget ([oMLX README](https://github.com/jundot/omlx/blob/main/README.md)). Every token the
+  quality lane's primed prefix needs to stay cache-hot competes for that same budget. Routing
+  lookups to a second, smaller oMLX model keeps that traffic from evicting the quality lane's
+  KV-cache blocks.
+- **Cloud:** offloads lookups entirely off your box — trades local-first privacy for
+  convenience/cost, your call per project.
+
+Enable it at install time (interactive prompt in `install.sh`) or later:
+
+```
+/context-research-lane status
+/context-research-lane local Qwen3-4B-Instruct-4bit
+/context-research-lane cloud openai gpt-5-mini
+/context-research-lane cloud anthropic claude-haiku-4-5
+/context-research-lane off
+```
+
+"Local" registers a `research-lane` model in `provider.omlx.models` (you still need to load
+that model file into oMLX's own model directory/admin dashboard) and points `agent.research` at
+it. "Cloud" points `agent.research` straight at the hosted provider/model — set
+`OPENAI_API_KEY` or `ANTHROPIC_API_KEY` in your shell profile first. Either way it writes
+`.opencode/prompts/research-agent.md` as that subagent's system prompt (read-only permissions,
+no file edits) if it doesn't already exist.
+
+Invoke it with `@research <question>` in a message, or let the primary agent delegate to it
+automatically based on its `description` in `opencode.json`.
 
 ## Common tasks
 

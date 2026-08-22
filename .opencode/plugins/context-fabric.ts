@@ -23,10 +23,11 @@
  * .context-fabric/logs/plugin-warnings.log and no-ops rather than crashing your
  * session.
  */
-import type { Plugin } from "@opencode-ai/plugin"
+import type { Plugin, PluginInput } from "@opencode-ai/plugin"
+import type { Part } from "@opencode-ai/sdk"
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs"
 import { join, relative, isAbsolute } from "node:path"
-import { createHash } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 
 const CF_DIR = ".context-fabric"
 const LOG_DIR = join(CF_DIR, "logs")
@@ -100,10 +101,153 @@ function toProjectRelativePath(root: string, path: string): string {
   return path
 }
 
+const CONFIG_PATH = join(CF_DIR, "config.json")
+
+/** Reads whether auto mode is on: CONTEXT_FABRIC_AUTO env var wins if set (0/false/off/no
+ * -> false, 1/true/on/yes -> true), else .context-fabric/config.json's `auto` field, else
+ * default ON. Fails soft (never throws) — a missing/corrupt config should not disable the
+ * feature it's supposed to control. */
+function readAutoEnabled(root: string): boolean {
+  const envVal = process.env.CONTEXT_FABRIC_AUTO
+  if (envVal !== undefined) {
+    const normalized = envVal.trim().toLowerCase()
+    if (["0", "false", "off", "no"].includes(normalized)) return false
+    if (["1", "true", "on", "yes"].includes(normalized)) return true
+  }
+  try {
+    const configPath = join(root, CONFIG_PATH)
+    if (!existsSync(configPath)) return true
+    const raw = JSON.parse(readFileSync(configPath, "utf-8"))
+    if (typeof raw?.auto === "boolean") return raw.auto
+    return true
+  } catch {
+    return true
+  }
+}
+
+// Session-scoped auto-mode state. Module-level Sets/Map are fine here because a single
+// plugin instance is created per OpenCode process, not per request.
+const autoPlannedSessions = new Set<string>()
+const pendingAutoCheckpoint = new Set<string>()
+let lastAutoIndexAt = 0
+const AUTO_INDEX_MIN_INTERVAL_MS = 15_000
+
+type ShellResult = { ok: boolean; text: string }
+
+async function runShell(shell: PluginInput["$"], root: string, cmd: ReturnType<PluginInput["$"]>): Promise<ShellResult> {
+  try {
+    const result = await cmd.cwd(root).nothrow().quiet()
+    const text = await result.text()
+    return { ok: result.exitCode === 0, text }
+  } catch (e) {
+    warn(root, `auto-mode shell command failed: ${e}`)
+    return { ok: false, text: String(e) }
+  }
+}
+
+async function autoIndex(shell: PluginInput["$"], root: string): Promise<ShellResult> {
+  return runShell(shell, root, shell`python3 scripts/context_index.py`)
+}
+
+async function autoPlan(shell: PluginInput["$"], root: string, task: string): Promise<ShellResult> {
+  // Bun shell template-literal interpolation auto-quotes `task` as a single safe argument —
+  // no manual escaping needed, and it must NOT be pre-escaped or it will be double-escaped.
+  return runShell(shell, root, shell`python3 scripts/context_plan.py --task ${task}`)
+}
+
+async function autoCheckpoint(shell: PluginInput["$"], root: string, pack: string): Promise<ShellResult> {
+  return runShell(shell, root, shell`python3 scripts/context_checkpoint.py --pack ${pack}`)
+}
+
+/** Builds a synthetic TextPart carrying an auto-mode note, tagged so the agent (via
+ * AGENTS.md's standing instructions) recognizes it as something to act on directly rather
+ * than a normal user message. `synthetic: true` matches the SDK's own TextPart field for
+ * exactly this purpose (see @opencode-ai/sdk's Part type). */
+function makeNotePart(sessionID: string, messageID: string, text: string): Part {
+  return {
+    id: `cf-auto-${randomUUID()}`,
+    sessionID,
+    messageID,
+    type: "text",
+    text,
+    synthetic: true,
+  } as Part
+}
+
 export const ContextFabricPlugin: Plugin = async (ctx) => {
   const root = ctx.directory
+  const shell = ctx.$
 
   return {
+    // --- Auto mode: reindex/plan/checkpoint without waiting to be asked ---------
+    // See README's "Auto mode" section. Deterministic steps (index/plan/checkpoint
+    // scripts) run here directly; reasoning steps (finalizing invariants, writing the
+    // checkpoint block, deciding when to prime) are delegated to whichever agent is
+    // already running the session, via an injected [context-fabric:auto] note plus
+    // standing instructions in the project's root AGENTS.md telling it to act on that
+    // tag autonomously -- pausing only for genuine `unknowns`.
+    "chat.message": async (input: any, output: { message: any; parts: Part[] }) => {
+      try {
+        if (!readAutoEnabled(root)) return
+        const sessionID: string = input?.sessionID ?? "unknown-session"
+        const messageID: string = input?.messageID ?? output?.message?.id ?? randomUUID()
+
+        const firstTextPart = output.parts.find((p: any) => p?.type === "text") as { text?: string } | undefined
+        const userText = firstTextPart?.text ?? ""
+
+        const notes: string[] = []
+
+        // Throttled reindex on every message -- cheap, no reasoning needed.
+        if (Date.now() - lastAutoIndexAt > AUTO_INDEX_MIN_INTERVAL_MS) {
+          lastAutoIndexAt = Date.now()
+          const result = await autoIndex(shell, root)
+          if (!result.ok) warn(root, `auto-mode autoIndex failed: ${result.text}`)
+        }
+
+        // Right after compaction: scaffold the next pack version, then nudge the agent
+        // to fill in its checkpoint block and re-prime on its own.
+        if (pendingAutoCheckpoint.has(sessionID)) {
+          pendingAutoCheckpoint.delete(sessionID)
+          const pack = activePackName(root)
+          if (pack) {
+            const result = await autoCheckpoint(shell, root, pack)
+            if (result.ok) {
+              notes.push(
+                `[context-fabric:auto] Compaction just finished and I scaffolded the next context pack version from ${pack} (see the checkpoint script's output above, and .context-fabric/packs / .context-fabric/history, for the exact new pack path/version). Fill in that pack's checkpoint block from the handoff you just wrote, re-derive source_slices/invariants/acceptance_tests for the next unit of work, then run /context-prime on it yourself now. Don't wait for me to ask.`,
+              )
+            } else {
+              warn(root, `auto-mode autoCheckpoint failed for pack ${pack}: ${result.text}`)
+            }
+          }
+        }
+
+        // First substantial message of a session: auto-draft a pack from the code
+        // graph and nudge the agent to finalize + prime it. Skips trivial messages
+        // and explicit slash-command invocations (already have their own flow).
+        if (
+          !autoPlannedSessions.has(sessionID) &&
+          userText.length >= 12 &&
+          !userText.startsWith("/")
+        ) {
+          autoPlannedSessions.add(sessionID)
+          const result = await autoPlan(shell, root, userText)
+          if (result.ok) {
+            notes.push(
+              `[context-fabric:auto] I drafted a context pack for this task from the static code graph (see the plan script's output above for its exact path/name). Review the code cone above, finalize invariants + acceptance_tests, resolve unknowns, and refine subtasks, then run /context-prime <name>:v1 yourself. Only pause to ask me if something under unknowns genuinely needs my input.`,
+            )
+          } else {
+            warn(root, `auto-mode autoPlan failed for session ${sessionID}: ${result.text}`)
+          }
+        }
+
+        if (notes.length > 0) {
+          output.parts.push(makeNotePart(sessionID, messageID, notes.join("\n\n")))
+        }
+      } catch (e) {
+        warn(root, `chat.message auto-mode hook failed: ${e}`)
+      }
+    },
+
     // --- Append-only enforcement -------------------------------------------------
     "tool.execute.before": async (input: any, _output: any) => {
       try {
@@ -226,6 +370,7 @@ export const ContextFabricPlugin: Plugin = async (ctx) => {
             context_pack: pack,
             note: "Run /context-checkpoint to turn this compaction into a new named pack version.",
           })
+          if (readAutoEnabled(root)) pendingAutoCheckpoint.add(sessionID)
           return
         }
         if (event.type === "file.edited") {
