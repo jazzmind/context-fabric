@@ -1,28 +1,40 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  "model": "ollama/qwen3.8:27b-mlx",
   "provider": {
+    "ollama": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Ollama MLX (default)",
+      "options": {
+        "baseURL": "http://127.0.0.1:11434/v1",
+        "timeout": 600000,
+        "chunkTimeout": 60000
+      },
+      "models": {
+        "qwen3.8:27b-mlx": {
+          "name": "Qwen3.8-27B MLX"
+        }
+      }
+    },
     "omlx": {
       "npm": "@ai-sdk/openai-compatible",
+      "name": "oMLX (expert backend)",
       "options": {
-        "baseURL": "http://localhost:8000/v1"
+        "baseURL": "http://127.0.0.1:8000/v1",
+        "timeout": 600000,
+        "chunkTimeout": 60000
       },
       "models": {
         "Qwen3.8-27B-8bit": {
-          "name": "Qwen3.8-27B (quality lane, MTP speculative decoding)",
-          "options": {
-            "draftModel": "Qwen3.8-27B-MTP-8bit"
-          }
-        },
-        "fast-lane-small": {
-          "name": "Fast lane (indexing / planning drafts / compaction)"
+          "name": "Qwen3.8-27B 8-bit (oMLX)"
         }
       }
     }
   },
   "agent": {
-    "build": { "model": "omlx/Qwen3.8-27B-8bit" },
-    "plan": { "model": "omlx/Qwen3.8-27B-8bit" }
+    "build": { "model": "ollama/qwen3.8:27b-mlx" },
+    "plan": { "model": "ollama/qwen3.8:27b-mlx" }
   },
-  "_comment_omlx_model_settings": "Register both models in oMLX's admin dashboard (typically http://localhost:8000/admin) or model_settings.json, matching the exact field names your installed oMLX version expects. Keep turboquant_kv_enabled and dflash_enabled OFF to start — see docs/omlx-qwen-setup.md.",
-  "_comment_env": "context_status.py reads OMLX_BASE_URL and OMLX_QUALITY_MODEL env vars (see .opencode/commands/context-status.md) — set these in your shell profile to match the values above."
+  "share": "disabled",
+  "_comment_context_fabric": "Ollama is the reference/default backend. To benchmark or tune oMLX, change model/agent refs to omlx/Qwen3.8-27B-8bit and run /context-backend set omlx. Advanced DFlash/MTP/TurboQuant/ANE settings belong to oMLX, not Context Fabric core."
 }

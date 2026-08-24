@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""/context-index — build/refresh the static code graph.
-
-Usage:
-    python3 scripts/context_index.py [--root .] [--out .context-fabric/graph.json]
-
-No model call. Safe to run often (e.g. on file.edited via the plugin, or manually).
-"""
+"""/context-index — build/refresh the deterministic repository graph."""
 from __future__ import annotations
 
 import argparse
@@ -34,27 +28,34 @@ def main() -> int:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(graph, indent=2))
 
-    # Cheap architecture summary: top-churn files, entrypoint-ish files (many imported_by),
-    # and test coverage ratio. This is what context_pack.base.architecture_summary points at.
     nodes = graph["nodes"]
-    most_imported = sorted(nodes.values(), key=lambda n: -len(n["imported_by"]))[:10]
-    most_churned = sorted(nodes.values(), key=lambda n: -n["churn_90d"])[:10]
+    most_imported = sorted(nodes.values(), key=lambda n: -(len(n.get("imported_by", [])) + len(n.get("referenced_by", []))))[:12]
+    most_churned = sorted(nodes.values(), key=lambda n: -n.get("churn_90d", 0))[:10]
+    changed = [n for n in nodes.values() if n.get("git_changed")]
 
     summary_lines = [
         f"# Architecture summary (auto-generated {time.strftime('%Y-%m-%d %H:%M:%S')})",
         "",
         f"- Files indexed: {graph['file_count']} ({graph['test_file_count']} test files)",
+        f"- Currently changed files: {graph.get('git_changed_file_count', 0)}",
+        "- Graph signals: imports, declared symbols, approximate symbol references, test topology, git churn/current changes",
         "",
-        "## Most depended-on files (likely core/shared modules)",
+        "## Most depended-on / referenced files",
     ]
     for n in most_imported:
-        if len(n["imported_by"]) == 0:
+        degree = len(n.get("imported_by", [])) + len(n.get("referenced_by", []))
+        if degree == 0:
             break
-        summary_lines.append(f"- `{n['path']}` — imported by {len(n['imported_by'])} files")
+        summary_lines.append(f"- `{n['path']}` — {degree} inbound import/symbol references")
+
+    if changed:
+        summary_lines += ["", "## Current working-tree changes"]
+        for n in changed[:20]:
+            summary_lines.append(f"- `{n['path']}`")
 
     summary_lines += ["", "## Highest-churn files (last 90 days)"]
     for n in most_churned:
-        if n["churn_90d"] == 0:
+        if n.get("churn_90d", 0) == 0:
             break
         summary_lines.append(f"- `{n['path']}` — {n['churn_90d']} commits")
 

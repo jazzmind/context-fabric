@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Compatibility shortcut: freeze + activate a finalized context pack.
-
-New integrations should think in three independent operations:
-  freeze(pack) -> activate(pack) -> optional warm(pack)
-`/context-prime` remains supported because it is convenient and preserves existing workflows.
-"""
+"""Freeze a finalized context pack into a deterministic, content-addressed prefix."""
 from __future__ import annotations
 
 import argparse
@@ -13,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib import packs  # noqa: E402
-from lib.runtime import activate_pack, freeze_pack  # noqa: E402
+from lib.runtime import freeze_pack  # noqa: E402
 
 
 def main() -> int:
@@ -23,19 +18,11 @@ def main() -> int:
     ap.add_argument("--force", action="store_true")
     args = ap.parse_args()
     try:
-        pack, prefix_text, _ = freeze_pack(args.pack, force=args.force)
-        pack, prefix_text, prefix_path = activate_pack(args.pack)
+        pack, prefix_text, prefix_path = freeze_pack(args.pack, force=args.force)
     except RuntimeError as exc:
         packs.eprint(str(exc))
         return 1
-    # Legacy lifecycle event for old status/plugin installations that only know "primed".
-    packs.append_history({
-        "event": "primed",
-        "context_pack": args.pack,
-        "prefix_hash": pack["prefix_hash"],
-        "compatibility_alias": True,
-    })
-    packs.eprint(f"Primed (freeze + activate) {args.pack}")
+    packs.eprint(f"Frozen {args.pack}")
     packs.eprint(f"  prefix_hash = {pack['prefix_hash']}")
     packs.eprint(f"  prefix file = {prefix_path}")
     packs.eprint(f"  ~{packs.approx_tokens(prefix_text)} tokens (deterministic proxy)")

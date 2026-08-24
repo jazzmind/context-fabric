@@ -1,128 +1,114 @@
 #!/usr/bin/env python3
-"""/context-status — render the cache/pack status table.
-
-Usage:
-    python3 scripts/context_status.py --pack approval-flow:v3 --base-url http://localhost:8000 --model Qwen3.8-27B-8bit
-
-If --base-url/--model are omitted, prints the pack/prefix-side fields only (no live probe).
-"""
+"""Render backend-aware context-pack status without pretending all caches expose telemetry."""
 from __future__ import annotations
 
 import argparse
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib import packs  # noqa: E402
+from lib.backends import probe_backend, resolve_backend  # noqa: E402
 
-REPO_ROOT = Path.cwd()  # project root, not this script's own location — see lib/packs.py
-
-
-def find_active_pack() -> str | None:
-    events_path = REPO_ROOT / ".context-fabric" / "history" / "pack-events.jsonl"
-    if not events_path.exists():
-        return None
-    last_primed = None
-    for line in events_path.read_text().splitlines():
-        try:
-            ev = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if ev.get("event") == "primed":
-            last_primed = ev.get("context_pack")
-    return last_primed
+REPO_ROOT = Path.cwd()
 
 
 def session_log_size(pack_name: str) -> int:
-    """Approx append-only tail size in WORDS, from the plugin's session log, if present.
-    Caller must convert to the same token proxy used for prefill_budget before comparing
-    the two (see packs.approx_tokens) -- these are not otherwise the same unit."""
     log_dir = REPO_ROOT / ".context-fabric" / "session-log"
-    total = 0
+    total_words = 0
     if not log_dir.exists():
         return 0
-    for f in log_dir.glob("*.jsonl"):
-        for line in f.read_text().splitlines():
+    for file in log_dir.glob("*.jsonl"):
+        for line in file.read_text().splitlines():
             try:
-                ev = json.loads(line)
+                event = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if ev.get("context_pack") == pack_name:
-                total += len(json.dumps(ev.get("content", "")).split())
-    return total
+            if event.get("context_pack") == pack_name:
+                if isinstance(event.get("content_words_approx"), (int, float)):
+                    total_words += int(event["content_words_approx"])
+                else:
+                    total_words += len(json.dumps(event.get("content", "")).split())
+    return total_words
 
 
 def last_invalidating_warning(pack_name: str) -> str | None:
-    """Surfaces the most recent plugin-logged warning that mentions this pack, so
-    /context-status's 'Invalidating change' row reflects what the plugin's
-    tool.definition/event hooks actually observed, instead of a static placeholder."""
-    log_path = REPO_ROOT / ".context-fabric" / "logs" / "plugin-warnings.log"
-    if not log_path.exists():
+    path = REPO_ROOT / ".context-fabric" / "logs" / "plugin-warnings.log"
+    if not path.exists():
         return None
-    matching = [line for line in log_path.read_text().splitlines() if pack_name in line]
+    matching = [line for line in path.read_text().splitlines() if pack_name in line]
     return matching[-1] if matching else None
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--pack", help="Defaults to the most recently primed pack.")
-    ap.add_argument("--base-url", help="oMLX OpenAI-compatible base URL, e.g. http://localhost:8000")
-    ap.add_argument("--model", help="Model id registered in oMLX for the quality lane.")
+    ap.add_argument("--pack", help="Defaults to the currently activated pack.")
+    ap.add_argument("--backend", help="auto | ollama | omlx | configured backend")
+    ap.add_argument("--probe", action="store_true", help="Send a small diagnostic request. This can warm/perturb backend cache state.")
+    ap.add_argument("--base-url", help="Override resolved backend URL for this probe.")
+    ap.add_argument("--model", help="Override resolved backend model for this probe.")
     args = ap.parse_args()
 
-    pack_name = args.pack or find_active_pack()
+    pack_name = args.pack or packs.get_active_pack()
     if not pack_name:
-        print("No primed pack found. Run /context-prime <pack:version> first.")
+        print("No active pack. Run /context-activate <pack> (or /context-prime <pack>) first.")
         return 1
 
     pack = packs.load_pack(pack_name)
-    prefix_path = REPO_ROOT / ".context-fabric" / "prefixes" / f"{pack_name.replace(':', '-')}.prefix.txt"
-    prefix_tokens_approx = packs.approx_tokens(prefix_path.read_text()) if prefix_path.exists() else None
-    tail_tokens_approx = round(session_log_size(pack_name) * 1.3)
+    prefix_path = packs.prefix_file_path(pack_name)
+    prefix_tokens = packs.approx_tokens(prefix_path.read_text()) if prefix_path.exists() else None
+    tail_tokens = round(session_log_size(pack_name) * 1.3)
     budget = pack.get("budget", {})
     prefill_budget = budget.get("prefill_tokens")
-    threshold_pct = budget.get("compaction_threshold_pct", 70)
-
     warning = last_invalidating_warning(pack_name)
+    spec = resolve_backend(args.backend, probe_reachability=args.probe)
+    if args.base_url or args.model:
+        spec = replace(spec, base_url=args.base_url or spec.base_url, model=args.model or spec.model)
 
-    row = {
+    row: dict[str, str] = {
         "Active context pack": pack_name,
-        "Stable prefix": f"~{prefix_tokens_approx} tokens (word-count proxy × 1.3 — see live probe below for a real count)" if prefix_tokens_approx else "unknown (prefix file missing)",
-        "Cache state": "unknown — run with --base-url/--model for a live probe",
-        "Last request reused": "unknown — run with --base-url/--model for a live probe",
-        "New tokens prefetched": "unknown — run with --base-url/--model for a live probe",
-        "Current task tail": f"~{tail_tokens_approx} tokens appended since priming (same word-count proxy)",
+        "Prefix hash": pack.get("prefix_hash", "not frozen"),
+        "Stable prefix": f"~{prefix_tokens} tokens (deterministic proxy)" if prefix_tokens else "unknown (prefix file missing)",
+        "Logged task tail": f"~{tail_tokens} tokens from user/tool events since activation (lower-bound proxy)",
         "Compaction risk": (
-            f"{min(100, round(100 * tail_tokens_approx / prefill_budget))}% of task budget (both sides approximated the same way — not a real token count)"
-            if prefill_budget else "unknown (pack has no budget.prefill_tokens)"
+            f"{min(100, round(100 * tail_tokens / prefill_budget))}% of prefix budget"
+            if prefill_budget else "unknown (no budget.prefill_tokens)"
         ),
-        "Invalidating change": warning if warning else ("none detected in plugin warnings log" if pack.get("prefix_hash") else "pack not primed yet"),
+        "Invalidating change": warning or "none detected",
+        "Backend": f"{spec.name} — {spec.model} @ {spec.base_url}",
+        "Cache behavior": (
+            "automatic / opaque telemetry" if spec.name == "ollama" else
+            "automatic / explicit cached-token telemetry" if spec.capabilities.cache_telemetry else
+            "backend-specific / unknown"
+        ),
+        "Persistent cache": "yes" if spec.capabilities.persistent_cache else "not assumed",
+        "Speculative decode": "supported by backend; configured outside Context Fabric" if spec.capabilities.speculative_decode else "not assumed",
     }
 
-    if args.base_url and args.model and prefix_path.exists():
-        from lib.omlx_client import probe_usage  # noqa: E402
-
-        result = probe_usage(args.base_url, args.model, prefix_path.read_text())
-        raw_log = REPO_ROOT / ".context-fabric" / "logs"
-        raw_log.mkdir(parents=True, exist_ok=True)
-        (raw_log / "last-status-raw.json").write_text(json.dumps(result, indent=2))
-        if result["error"]:
-            row["Cache state"] = f"probe failed: {result['error']}"
+    if args.probe and prefix_path.exists():
+        result = probe_backend(spec, prefix_path.read_text())
+        log_dir = REPO_ROOT / ".context-fabric" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        (log_dir / "last-status-raw.json").write_text(json.dumps({"backend": spec.to_dict(), "probe": result}, indent=2) + "\n")
+        if result.get("error"):
+            row["Diagnostic probe"] = f"failed: {result['error']}"
         else:
-            row["Cache state"] = "hot/SSD/cold — see .context-fabric/logs/last-status-raw.json for raw fields"
-            row["Last request reused"] = json.dumps(result["cache_fields"]) if result["cache_fields"] else (
-                "no field containing 'cache' in usage response — check last-status-raw.json and "
-                "update lib/omlx_client.py's field matching for your oMLX version"
+            cached = result.get("cached_tokens")
+            row["Diagnostic probe"] = (
+                f"cached_tokens={cached}, prompt_tokens={result.get('prompt_tokens')}, total={result.get('total_duration_s')}s"
+                if cached is not None else
+                f"prompt_tokens={result.get('prompt_tokens')}, total={result.get('total_duration_s')}s; backend does not expose cached-token count"
             )
-            usage = result["raw_usage"] or {}
-            row["New tokens prefetched"] = usage.get("prompt_tokens", "unknown (see last-status-raw.json)")
+    else:
+        row["Diagnostic probe"] = "not run (use --probe; it may alter cache state)"
 
-    width = max(len(k) for k in row) + 2
+    width = max(len(key) for key in row) + 2
     print(f"{'Field'.ljust(width)}| Value")
     print("-" * width + "|" + "-" * 40)
-    for k, v in row.items():
-        print(f"{k.ljust(width)}| {v}")
+    for key, value in row.items():
+        print(f"{key.ljust(width)}| {value}")
     return 0
 
 

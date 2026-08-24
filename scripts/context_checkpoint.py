@@ -73,7 +73,7 @@ def main() -> int:
                 "below, then re-derive source_slices/invariants/acceptance_tests for the next unit of work."
             ],
         },
-        "budget": current.get("budget", {"prefill_tokens": 84000, "reserve_output_tokens": 16000, "compaction_threshold_pct": 70}),
+        "budget": current.get("budget", packs.DEFAULT_BUDGET.copy()),
         "execution": {"prefix": "immutable", "history": "append_only", "compaction": "task_checkpoint"},
         "subtasks": [
             "discover affected graph",
@@ -99,8 +99,8 @@ def main() -> int:
     print(f"Scaffolded {next_id} -> {path}")
     print(
         "Fill in the `checkpoint` block (changed_files, verified_facts, failed_hypotheses, "
-        "test_status, next_decision), then re-derive source_slices/invariants/acceptance_tests, "
-        f"then run: python3 scripts/context_prime.py --pack {next_id}"
+        "test_status, next_decision), then run the task-cone refresh before finalizing invariants/tests: "
+        f"python3 scripts/context_plan.py --refresh-pack {next_id}. Then freeze+activate it."
     )
     return 0
 

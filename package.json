@@ -1,11 +1,12 @@
 {
   "name": "context-fabric",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "Cache-native agent runtime policy layer: OpenCode plugin + context-pack scripts for a local oMLX/Qwen setup.",
+  "description": "Deterministic context runtime for coding agents: task-scoped versioned packs optimized for attention quality and prefix-cache reuse.",
   "type": "module",
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "python3 -m unittest discover -s tests -p \"test_*.py\""
   },
   "devDependencies": {
     "@opencode-ai/plugin": "latest",

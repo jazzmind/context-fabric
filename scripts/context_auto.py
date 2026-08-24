@@ -4,10 +4,10 @@
 Auto mode is read by the context-fabric OpenCode plugin (.opencode/plugins/context-fabric.ts)
 on every message. When on (the default), the plugin:
   - throttled-reindexes the static code graph on every message,
-  - auto-drafts a context pack and nudges the agent to finalize + prime it on the first
+  - auto-drafts a context pack and nudges the agent to finalize + freeze/activate it on the first
     substantial message of a session,
   - auto-scaffolds the next pack version right after compaction and nudges the agent to
-    fill in its checkpoint block and re-prime, without waiting to be asked.
+    fill in its checkpoint block, refresh its task cone, and freeze/activate, without waiting to be asked.
 
 This script only flips the on/off switch in .context-fabric/config.json. It does not talk to
 OpenCode directly — the plugin reads the file (or the CONTEXT_FABRIC_AUTO env var, which takes

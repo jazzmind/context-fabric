@@ -2,9 +2,16 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://context-fabric.local/schema/context-pack.schema.json",
   "title": "context_pack",
-  "description": "A typed, versioned, immutable prefix asset for a cache-native agent task.",
+  "description": "A typed, versioned context artifact optimized for model attention and stable-prefix reuse.",
   "type": "object",
-  "required": ["task", "context_pack", "base", "budget", "execution", "subtasks"],
+  "required": [
+    "task",
+    "context_pack",
+    "base",
+    "budget",
+    "execution",
+    "subtasks"
+  ],
   "properties": {
     "task": {
       "type": "string",
@@ -18,16 +25,26 @@
     "prefix_hash": {
       "type": "string",
       "pattern": "^sha256:[a-f0-9]{64}$",
-      "description": "Content hash of the assembled immutable prefix. Filled in by context_prime.py; absent on a freshly drafted (not yet primed) pack."
+      "description": "Content hash of the frozen immutable prefix. Filled by context_freeze.py (or context_prime.py compatibility shortcut)."
     },
     "parent_pack": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "The context_pack this one checkpoints forward from, or null if this is v1."
     },
     "base": {
       "type": "object",
       "description": "The immutable prefix's content, in the fixed order it will be assembled.",
-      "required": ["system_prompt", "tool_contract", "architecture_summary", "dependency_graph", "source_slices", "invariants"],
+      "required": [
+        "system_prompt",
+        "tool_contract",
+        "architecture_summary",
+        "dependency_graph",
+        "source_slices",
+        "invariants"
+      ],
       "properties": {
         "system_prompt": {
           "type": "string",
@@ -49,37 +66,61 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["path"],
+            "required": [
+              "path"
+            ],
             "properties": {
-              "path": { "type": "string" },
-              "reason": { "type": "string" },
-              "lines": { "type": "string", "description": "Optional line range, e.g. '1-120'." }
+              "path": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "lines": {
+                "type": "string",
+                "description": "Optional line range, e.g. '1-120'."
+              }
             }
           }
         },
         "invariants": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "description": "Explicit statements the implementation must not violate. Written/validated by the quality-lane model."
         },
         "acceptance_tests": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "description": "Concrete, checkable tests (paths or descriptions) that define done."
         },
         "unknowns": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "description": "Ambiguities the fast lane flagged for the quality lane to resolve before finalizing."
         }
       }
     },
     "budget": {
       "type": "object",
-      "required": ["prefill_tokens", "reserve_output_tokens"],
+      "required": [
+        "prefill_tokens",
+        "reserve_output_tokens"
+      ],
       "properties": {
-        "prefill_tokens": { "type": "integer", "minimum": 0 },
-        "reserve_output_tokens": { "type": "integer", "minimum": 0 },
+        "prefill_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reserve_output_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
         "compaction_threshold_pct": {
           "type": "number",
           "minimum": 0,
@@ -91,33 +132,105 @@
     },
     "execution": {
       "type": "object",
-      "required": ["prefix", "history", "compaction"],
+      "required": [
+        "prefix",
+        "history",
+        "compaction"
+      ],
       "properties": {
-        "prefix": { "const": "immutable" },
-        "history": { "const": "append_only" },
-        "compaction": { "const": "task_checkpoint" }
+        "prefix": {
+          "const": "immutable"
+        },
+        "history": {
+          "const": "append_only"
+        },
+        "compaction": {
+          "const": "task_checkpoint"
+        }
       }
     },
     "subtasks": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "minItems": 1
     },
     "status": {
       "type": "string",
-      "enum": ["draft", "finalized", "active", "checkpointed", "superseded"],
+      "enum": [
+        "draft",
+        "finalized",
+        "frozen",
+        "active",
+        "checkpointed",
+        "superseded"
+      ],
       "default": "draft"
     },
-    "created_at": { "type": "string", "format": "date-time" },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
     "checkpoint": {
       "type": "object",
       "description": "Present only on packs produced by /context-checkpoint from a prior pack.",
       "properties": {
-        "changed_files": { "type": "array", "items": { "type": "string" } },
-        "verified_facts": { "type": "array", "items": { "type": "string" } },
-        "failed_hypotheses": { "type": "array", "items": { "type": "string" } },
-        "test_status": { "type": "string" },
-        "next_decision": { "type": "string" }
+        "changed_files": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "verified_facts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "failed_hypotheses": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "test_status": {
+          "type": "string"
+        },
+        "next_decision": {
+          "type": "string"
+        }
+      }
+    },
+    "selection": {
+      "type": "object",
+      "description": "Deterministic planner telemetry describing how source_slices were selected; not a runtime/backend contract.",
+      "properties": {
+        "strategy": {
+          "type": "string"
+        },
+        "seeds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "source_budget_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "selected_files": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "prior_discovery_files": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       }
     }
   }

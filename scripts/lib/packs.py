@@ -1,4 +1,4 @@
-"""Read/write/validate context_pack YAML files under .context-fabric/packs/."""
+"""Read/write/validate context-pack YAML files and active-pack state."""
 from __future__ import annotations
 
 import datetime
@@ -15,21 +15,24 @@ try:
 except ImportError:  # pragma: no cover
     jsonschema = None
 
-# Project root = current working directory, NOT this script's own location. OpenCode runs
-# command-template shell snippets from the project's root directory, and these scripts are
-# meant to operate on whatever project context-fabric has been installed into (see
-# install.sh) — not on the context-fabric repo itself. If you're running these scripts by
-# hand, `cd` into your project root first.
 PROJECT_ROOT = Path.cwd()
-SCRIPT_DIR = Path(__file__).resolve().parents[1]  # .../scripts, for locating schema/ if it
-# was installed alongside scripts/ rather than at the project root (install.sh keeps them
-# siblings, so this is a fallback, not the primary path).
-PACKS_DIR = PROJECT_ROOT / ".context-fabric" / "packs"
-HISTORY_DIR = PROJECT_ROOT / ".context-fabric" / "history"
-_schema_candidates = [PROJECT_ROOT / "schema" / "context-pack.schema.json", SCRIPT_DIR.parent / "schema" / "context-pack.schema.json"]
+SCRIPT_DIR = Path(__file__).resolve().parents[1]
+CF_DIR = PROJECT_ROOT / ".context-fabric"
+PACKS_DIR = CF_DIR / "packs"
+HISTORY_DIR = CF_DIR / "history"
+ACTIVE_STATE_PATH = CF_DIR / "active.json"
+_schema_candidates = [
+    PROJECT_ROOT / "schema" / "context-pack.schema.json",
+    SCRIPT_DIR.parent / "schema" / "context-pack.schema.json",
+]
 SCHEMA_PATH = next((p for p in _schema_candidates if p.exists()), _schema_candidates[0])
 
 PACK_NAME_RE = re.compile(r"^([a-z0-9][a-z0-9-]*):v(\d+)$")
+DEFAULT_BUDGET = {
+    "prefill_tokens": 32000,
+    "reserve_output_tokens": 16000,
+    "compaction_threshold_pct": 70,
+}
 
 
 def now_iso() -> str:
@@ -37,10 +40,7 @@ def now_iso() -> str:
 
 
 def approx_tokens(text: str) -> int:
-    """Rough word->token proxy (~1.3 tokens/word for English prose+code) used ONLY
-    until a real usage-based count is available from oMLX (see docs/omlx-qwen-setup.md
-    and lib/omlx_client.py). Never treat this as the real prefill size — /context-status
-    should prefer a live probe's usage field when one is available."""
+    """Cheap, deterministic size proxy used when the backend exposes no tokenizer count."""
     return round(len(text.split()) * 1.3)
 
 
@@ -51,7 +51,6 @@ def load_schema() -> Optional[dict]:
 
 
 def validate_pack(pack: dict) -> list[str]:
-    """Returns a list of validation error strings (empty = valid)."""
     schema = load_schema()
     if schema is None or jsonschema is None:
         return ["jsonschema/schema unavailable — skipped structural validation"]
@@ -60,7 +59,6 @@ def validate_pack(pack: dict) -> list[str]:
 
 
 def pack_file_path(context_pack: str) -> Path:
-    """context_pack like 'approval-flow:v3' -> .context-fabric/packs/approval-flow-v3.yaml"""
     m = PACK_NAME_RE.match(context_pack)
     if not m:
         raise ValueError(f"context_pack must match '<name>:v<n>', got {context_pack!r}")
@@ -69,7 +67,6 @@ def pack_file_path(context_pack: str) -> Path:
 
 
 def latest_version(name: str) -> int:
-    """Highest existing version number for a pack name, or 0 if none exist."""
     best = 0
     if not PACKS_DIR.exists():
         return best
@@ -87,28 +84,27 @@ def load_pack(context_pack: str) -> dict:
     return yaml.safe_load(path.read_text())
 
 
-def save_pack(pack: dict, *, allow_overwrite_if_unprimed: bool = True) -> Path:
-    """Writes a pack to disk. By default (allow_overwrite_if_unprimed=True), refuses
-    to overwrite only a pack that already has a prefix_hash (i.e. has been primed) —
-    that would silently break the cache invariant. Passing
-    allow_overwrite_if_unprimed=False refuses to overwrite ANY existing pack file,
-    primed or not (used by context_plan.py so a repeated draft doesn't clobber
-    in-progress quality-lane edits). Use context_checkpoint.py to move forward to a
-    new version instead of overwriting either way.
+def save_pack(pack: dict, *, allow_overwrite_if_unfrozen: bool = True, **legacy_kwargs: Any) -> Path:
+    """Write a pack without allowing an already-frozen prefix to mutate in place.
+
+    ``allow_overwrite_if_unprimed`` is accepted as a compatibility alias for older callers.
     """
+    if "allow_overwrite_if_unprimed" in legacy_kwargs:
+        allow_overwrite_if_unfrozen = bool(legacy_kwargs["allow_overwrite_if_unprimed"])
+
     path = pack_file_path(pack["context_pack"])
     if path.exists():
         existing = yaml.safe_load(path.read_text()) or {}
-        if not allow_overwrite_if_unprimed:
+        if not allow_overwrite_if_unfrozen:
             raise RuntimeError(
                 f"{path} already exists — refusing to overwrite. Delete it first if you "
-                "really want to redraft it, or bump the version and use context_checkpoint.py."
+                "really want to redraft it, or checkpoint/bump the version."
             )
         if existing.get("prefix_hash"):
             raise RuntimeError(
-                f"{path} was already primed (prefix_hash={existing['prefix_hash']}) — "
-                "refusing to overwrite an active/primed pack. Run context_checkpoint.py "
-                "to create the next version instead."
+                f"{path} was already frozen (prefix_hash={existing['prefix_hash']}) — "
+                "refusing to mutate a content-addressed context pack. Create the next "
+                "version with context_checkpoint.py instead."
             )
     PACKS_DIR.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(pack, sort_keys=False, width=100))
@@ -116,12 +112,72 @@ def save_pack(pack: dict, *, allow_overwrite_if_unprimed: bool = True) -> Path:
 
 
 def append_history(event: dict) -> None:
-    """Append-only log of pack lifecycle events. Never rewritten, only appended."""
     HISTORY_DIR.mkdir(parents=True, exist_ok=True)
     log_path = HISTORY_DIR / "pack-events.jsonl"
     event = {"ts": now_iso(), **event}
     with log_path.open("a") as f:
         f.write(json.dumps(event) + "\n")
+
+
+def set_active_pack(context_pack: str, prefix_hash: str) -> Path:
+    CF_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "context_pack": context_pack,
+        "prefix_hash": prefix_hash,
+        "activated_at": now_iso(),
+    }
+    ACTIVE_STATE_PATH.write_text(json.dumps(payload, indent=2) + "\n")
+    append_history({"event": "activated", **payload})
+    return ACTIVE_STATE_PATH
+
+
+def clear_active_pack() -> None:
+    if ACTIVE_STATE_PATH.exists():
+        try:
+            previous = json.loads(ACTIVE_STATE_PATH.read_text())
+        except json.JSONDecodeError:
+            previous = {}
+        ACTIVE_STATE_PATH.unlink()
+        append_history({"event": "deactivated", "context_pack": previous.get("context_pack")})
+
+
+def get_active_state() -> Optional[dict]:
+    if ACTIVE_STATE_PATH.exists():
+        try:
+            state = json.loads(ACTIVE_STATE_PATH.read_text())
+            if state.get("context_pack"):
+                return state
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # Compatibility with packs created before active.json existed.
+    log_path = HISTORY_DIR / "pack-events.jsonl"
+    if not log_path.exists():
+        return None
+    last: Optional[dict] = None
+    for line in log_path.read_text().splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("event") in {"activated", "primed"} and event.get("context_pack"):
+            last = {
+                "context_pack": event["context_pack"],
+                "prefix_hash": event.get("prefix_hash"),
+                "activated_at": event.get("ts"),
+            }
+        elif event.get("event") == "deactivated":
+            last = None
+    return last
+
+
+def get_active_pack() -> Optional[str]:
+    state = get_active_state()
+    return state.get("context_pack") if state else None
+
+
+def prefix_file_path(context_pack: str) -> Path:
+    return CF_DIR / "prefixes" / f"{context_pack.replace(':', '-')}.prefix.txt"
 
 
 def eprint(*args: Any) -> None:
