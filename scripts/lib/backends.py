@@ -66,6 +66,16 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "source_budget_tokens": 18000,
         "working_context_tokens": 64000,
     },
+    "gpu_lease": {
+        "agent_model": "qwen3.8:27b-mlx",
+        "coding_model": "qwen3.6:35b-a3b-coding-mxfp8",
+        "default_ttl_s": 7200,
+        "heartbeat_s": 60,
+        "shared_min_free_gb": 45,
+        "state_dir": "~/.local/state/gpu-lease",
+        "lima_instance": "ea",
+        "lima_unit": "ea-thinkers",
+    },
 }
 
 
@@ -317,3 +327,38 @@ def _ns_to_s(value: Any) -> Optional[float]:
     if isinstance(value, (int, float)):
         return float(value) / 1_000_000_000
     return None
+
+
+def unload_model(spec: BackendSpec, model: Optional[str] = None, *, timeout: float = 30.0) -> dict[str, Any]:
+    """Evict a model from VRAM.
+
+    Ollama documents that an empty prompt with keep_alive=0 unloads the model from memory
+    (https://github.com/ollama/ollama/blob/main/docs/faq.md). Preferred over shelling out to
+    `ollama stop` because it reuses this module's existing requests/timeout/error handling and
+    returns structured JSON we can log to the lease event history.
+    """
+    target = model or spec.model
+    if spec.api_style != "ollama":
+        return {"backend": spec.name, "unloaded": False, "reason": "unload only implemented for ollama"}
+    try:
+        resp = requests.post(
+            f"{spec.base_url}/api/generate",
+            json={"model": target, "keep_alive": 0},
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        return {"backend": spec.name, "model": target, "unloaded": True}
+    except requests.RequestException as exc:
+        return {"backend": spec.name, "model": target, "unloaded": False, "error": str(exc)}
+
+
+def loaded_models(spec: BackendSpec, *, timeout: float = 5.0) -> list[dict[str, Any]]:
+    """List models currently resident in VRAM (Ollama's GET /api/ps). Empty list on any error
+    or on backends that don't expose this — callers should treat that as "unknown", not "none".
+    """
+    try:
+        resp = requests.get(f"{spec.base_url}/api/ps", timeout=timeout)
+        resp.raise_for_status()
+        return resp.json().get("models", [])
+    except requests.RequestException:
+        return []
