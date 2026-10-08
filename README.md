@@ -190,6 +190,37 @@ or:
 See `docs/ollama-qwen-setup.md` for the default setup and `docs/omlx-qwen-setup.md` for the
 expert backend.
 
+## Claude Code
+
+The Python core is harness-neutral. Install the Claude Code adapter instead of, or alongside,
+the OpenCode plugin:
+
+```bash
+./install.sh ~/Code/my-project --harness claude   # or --harness both; default is opencode
+```
+
+This generates `.claude/commands/context-*.md` from the OpenCode commands, merges hooks into
+`.claude/settings.json` (existing settings and hooks are preserved), and appends a context-fabric
+block to `CLAUDE.md`. `scripts/claude_hook.py` is the hook-based twin of the OpenCode plugin:
+
+| OpenCode plugin | Claude Code |
+|---|---|
+| `experimental.chat.system.transform` injects the pack prefix | `CLAUDE.md` imports `@.context-fabric/active-prefix.md`, which `lib/packs.py` rewrites on every activate/deactivate |
+| `chat.message`: reindex, auto-plan on the first prompt | `UserPromptSubmit` hook; also points the agent at a pack activated mid-session |
+| `experimental.session.compacting` replaces the compaction prompt | `PreCompact` scaffolds the next pack version; `SessionStart` (source `compact`) then asks for the five-field checkpoint and re-prime |
+| `tool.execute.before/after`, `file.edited` | `PreToolUse` / `PostToolUse`: session log, warning when a frozen source slice is edited |
+
+Two differences are inherent to Claude Code and worth knowing when comparing harnesses:
+
+- Hook output is capped at 10,000 characters, so the prefix travels through the `CLAUDE.md`
+  import, which is read at session start. A pack activated mid-session reaches the model as a
+  pointer to read `active-prefix.md`, not as a system-prompt change.
+- Hooks can't rewrite Claude Code's compaction prompt. The checkpoint is requested right after
+  compaction instead of replacing it.
+
+To remove context-fabric (either harness): `./uninstall.sh ~/Code/my-project [--purge]`. Packs,
+checkpoints and history are kept unless `--purge` is given.
+
 ## Commands
 
 | Command | Purpose |
@@ -206,7 +237,9 @@ expert backend.
 | `/context-backend status|set ...` | Inspect/select backend adapter |
 | `/context-auto on|off|status` | Toggle automatic index/plan/checkpoint nudges |
 | `/context-research-lane ...` | Configure optional isolated lookup subagent |
-| `/context-benchmark ...` | Run whole-task four-lane benchmark suite |
+
+The benchmark is a script, not a command: `python3 scripts/context_benchmark.py ...` runs the
+whole-task four-lane suite.
 
 ## Configuration
 

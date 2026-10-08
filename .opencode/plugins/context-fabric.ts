@@ -12,8 +12,8 @@
  *
  * Hook signatures below were checked against the authoritative Hooks interface in
  * @opencode-ai/plugin's own source (packages/plugin/src/index.ts) on 2026-08-21, not
- * just tutorial docs — see README.md's "What's actually implemented vs. left for you
- * to verify" section for the exact source used. Two important corrections from an
+ * just tutorial docs. The Claude Code equivalent of this plugin is
+ * scripts/claude_hook.py (see README.md, "Claude Code"). Two important corrections from an
  * earlier draft of this plugin: (1) `file.edited` and `session.compacted` are NOT
  * their own top-level hooks — they only arrive as `event.type` values inside the
  * generic `event` hook; (2) `tool.definition` fires once PER TOOL with
@@ -25,7 +25,7 @@
  */
 import type { Plugin, PluginInput } from "@opencode-ai/plugin"
 import type { Part } from "@opencode-ai/sdk"
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs"
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync, existsSync, realpathSync } from "node:fs"
 import { join, relative, isAbsolute } from "node:path"
 import { createHash, randomUUID } from "node:crypto"
 
@@ -108,8 +108,11 @@ const toolSchemaHash = new Map<string, string>()
  * relative to the project root, so it can be matched against the relative paths
  * stored in context_pack YAML source_slices. */
 function toProjectRelativePath(root: string, path: string): string {
-  if (isAbsolute(path)) return relative(root, path)
-  return path
+  if (!isAbsolute(path)) return path
+  // Resolve symlinks on both sides (macOS /var -> /private/var) so the match against
+  // source_slices doesn't silently miss.
+  const real = (p: string) => (existsSync(p) ? realpathSync(p) : p)
+  return relative(real(root), real(path))
 }
 
 const CONFIG_PATH = join(CF_DIR, "config.json")

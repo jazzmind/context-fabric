@@ -21,6 +21,10 @@ CF_DIR = PROJECT_ROOT / ".context-fabric"
 PACKS_DIR = CF_DIR / "packs"
 HISTORY_DIR = CF_DIR / "history"
 ACTIVE_STATE_PATH = CF_DIR / "active.json"
+# Claude Code loads this via `@.context-fabric/active-prefix.md` in CLAUDE.md. Hook output is
+# capped at 10k chars, far below a pack prefix, so the import is the stable injection path.
+ACTIVE_PREFIX_MD_PATH = CF_DIR / "active-prefix.md"
+NO_ACTIVE_PACK_MD = "<!-- context-fabric: no context pack is active -->\n"
 _schema_candidates = [
     PROJECT_ROOT / "schema" / "context-pack.schema.json",
     SCRIPT_DIR.parent / "schema" / "context-pack.schema.json",
@@ -128,6 +132,7 @@ def set_active_pack(context_pack: str, prefix_hash: str) -> Path:
     }
     ACTIVE_STATE_PATH.write_text(json.dumps(payload, indent=2) + "\n")
     append_history({"event": "activated", **payload})
+    sync_active_prefix_md()
     return ACTIVE_STATE_PATH
 
 
@@ -139,6 +144,7 @@ def clear_active_pack() -> None:
             previous = {}
         ACTIVE_STATE_PATH.unlink()
         append_history({"event": "deactivated", "context_pack": previous.get("context_pack")})
+    sync_active_prefix_md()
 
 
 def get_active_state() -> Optional[dict]:
@@ -178,6 +184,19 @@ def get_active_pack() -> Optional[str]:
 
 def prefix_file_path(context_pack: str) -> Path:
     return CF_DIR / "prefixes" / f"{context_pack.replace(':', '-')}.prefix.txt"
+
+
+def sync_active_prefix_md() -> Path:
+    """Mirror the active pack's frozen prefix into active-prefix.md (or a placeholder)."""
+    CF_DIR.mkdir(parents=True, exist_ok=True)
+    pack = get_active_pack()
+    prefix = prefix_file_path(pack) if pack else None
+    if pack and prefix and prefix.exists():
+        body = f'<context-fabric-pack name="{pack}">\n{prefix.read_text()}\n</context-fabric-pack>\n'
+    else:
+        body = NO_ACTIVE_PACK_MD
+    ACTIVE_PREFIX_MD_PATH.write_text(body)
+    return ACTIVE_PREFIX_MD_PATH
 
 
 def eprint(*args: Any) -> None:

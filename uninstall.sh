@@ -17,6 +17,8 @@ if [ ! -f "$MANIFEST" ]; then
   exit 1
 fi
 
+python3 "$SRC_DIR/scripts/install_claude.py" uninstall "$DEST"
+
 python3 - "$DEST" "$MANIFEST" "$SRC_DIR" <<'PY'
 import json, sys
 from pathlib import Path

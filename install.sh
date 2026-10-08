@@ -2,20 +2,29 @@
 # Install context-fabric into an existing project.
 set -euo pipefail
 
-if [ $# -ne 1 ]; then
-  echo "Usage: $0 /path/to/your/project" >&2
-  exit 1
-fi
+usage() { echo "Usage: $0 /path/to/your/project [--harness opencode|claude|both]" >&2; exit 1; }
+[ $# -ge 1 ] || usage
+DEST="$1"; shift
+HARNESS="opencode"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --harness) HARNESS="${2:-}"; shift 2 ;;
+    *) usage ;;
+  esac
+done
+case "$HARNESS" in opencode|claude|both) ;; *) usage ;; esac
+WANT_OPENCODE=0; WANT_CLAUDE=0
+[ "$HARNESS" != "claude" ] && WANT_OPENCODE=1
+[ "$HARNESS" != "opencode" ] && WANT_CLAUDE=1
 
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DEST="$1"
 if [ ! -d "$DEST" ]; then
   echo "Target project directory does not exist: $DEST" >&2
   exit 1
 fi
 
 RESEARCH_LANE_ARGS=""
-if [ -z "${CONTEXT_FABRIC_BENCHMARK:-}" ] && [ -t 0 ] && [ -t 1 ]; then
+if [ "$WANT_OPENCODE" = 1 ] && [ -z "${CONTEXT_FABRIC_BENCHMARK:-}" ] && [ -t 0 ] && [ -t 1 ]; then
   echo
   echo "Optional: route tangential lookup/research work to an isolated OpenCode subagent."
   echo "  1) None (default)"
@@ -43,9 +52,11 @@ if [ -z "${CONTEXT_FABRIC_BENCHMARK:-}" ] && [ -t 0 ] && [ -t 1 ]; then
   esac
 fi
 
-mkdir -p "$DEST/.opencode/plugins" "$DEST/.opencode/commands"
-cp -R "$SRC_DIR/.opencode/plugins/." "$DEST/.opencode/plugins/"
-cp -R "$SRC_DIR/.opencode/commands/." "$DEST/.opencode/commands/"
+if [ "$WANT_OPENCODE" = 1 ]; then
+  mkdir -p "$DEST/.opencode/plugins" "$DEST/.opencode/commands"
+  cp -R "$SRC_DIR/.opencode/plugins/." "$DEST/.opencode/plugins/"
+  cp -R "$SRC_DIR/.opencode/commands/." "$DEST/.opencode/commands/"
+fi
 mkdir -p "$DEST/scripts" "$DEST/schema" "$DEST/docs"
 cp -R "$SRC_DIR/scripts/." "$DEST/scripts/"
 cp -R "$SRC_DIR/schema/." "$DEST/schema/"
@@ -53,11 +64,16 @@ for doc in context-pack-spec.md ollama-qwen-setup.md omlx-qwen-setup.md backend-
   if [ -f "$SRC_DIR/docs/$doc" ]; then cp -n "$SRC_DIR/docs/$doc" "$DEST/docs/" 2>/dev/null || true; fi
 done
 
-if [ ! -f "$DEST/opencode.json" ]; then
-  cp "$SRC_DIR/opencode.json.example" "$DEST/opencode.json.example"
-  echo "Copied opencode.json.example -> $DEST (Ollama MLX is the reference/default provider)."
+if [ "$WANT_OPENCODE" = 1 ]; then
+  if [ ! -f "$DEST/opencode.json" ]; then
+    cp "$SRC_DIR/opencode.json.example" "$DEST/opencode.json.example"
+    echo "Copied opencode.json.example -> $DEST (Ollama MLX is the reference/default provider)."
+  fi
+
 fi
 
+# Pack prefixes reference these two files for every harness (base.system_prompt and
+# base.tool_contract in context_plan.py), so write them whichever harness is installed.
 if [ ! -f "$DEST/.opencode/prompts/system.md" ]; then
   mkdir -p "$DEST/.opencode/prompts"
   cat > "$DEST/.opencode/prompts/system.md" <<'EOF'
@@ -104,7 +120,7 @@ fi
 
 AGENTS_MARKER="<!-- context-fabric:auto-mode-instructions -->"
 AGENTS_END_MARKER="<!-- /context-fabric:auto-mode-instructions -->"
-if [ ! -f "$DEST/AGENTS.md" ] || ! grep -qF "$AGENTS_MARKER" "$DEST/AGENTS.md" 2>/dev/null; then
+if [ "$WANT_OPENCODE" = 1 ] && { [ ! -f "$DEST/AGENTS.md" ] || ! grep -qF "$AGENTS_MARKER" "$DEST/AGENTS.md" 2>/dev/null; }; then
   {
     echo "$AGENTS_MARKER"
     cat <<'EOF'
@@ -122,12 +138,21 @@ EOF
   echo "Appended context-fabric auto-mode instructions to AGENTS.md"
 fi
 
+if [ "$WANT_CLAUDE" = 1 ]; then
+  python3 "$SRC_DIR/scripts/install_claude.py" install "$DEST"
+fi
+
 if [ -n "$RESEARCH_LANE_ARGS" ]; then
   (cd "$DEST" && python3 scripts/context_research_lane.py "$RESEARCH_LANE_ARGS")
 fi
 
 echo
-echo "Installed context-fabric into $DEST"
+echo "Installed context-fabric into $DEST (harness: $HARNESS)"
 echo "Next: cd $DEST && python3 -m pip install -r scripts/requirements.txt"
-echo "Review opencode.json.example, rename/copy it to opencode.json, then run: opencode ."
+if [ "$WANT_OPENCODE" = 1 ]; then
+  echo "Review opencode.json.example, rename/copy it to opencode.json, then run: opencode ."
+fi
+if [ "$WANT_CLAUDE" = 1 ]; then
+  echo "Claude Code: hooks are in .claude/settings.json; the active pack loads via CLAUDE.md."
+fi
 echo "Useful commands: /context-backend status, /context-index, /context-plan, /context-status"
