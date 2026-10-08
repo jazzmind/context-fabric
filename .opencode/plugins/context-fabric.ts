@@ -66,10 +66,20 @@ function hashOf(text: string): string {
   return "sha256:" + createHash("sha256").update(text).digest("hex")
 }
 
-/** Reads the current active pack's name from .context-fabric/history/pack-events.jsonl
- * (the last "primed" event), mirroring scripts/context_status.py's find_active_pack(). */
+/** Reads the current active pack's name, mirroring scripts/lib/packs.py get_active_state():
+ * .context-fabric/active.json first, then the last "activated"/"primed" event in
+ * history/pack-events.jsonl (cleared by "deactivated") for packs older than active.json. */
 function activePackName(root: string): string | null {
   try {
+    const statePath = join(root, CF_DIR, "active.json")
+    if (existsSync(statePath)) {
+      try {
+        const state = JSON.parse(readFileSync(statePath, "utf-8"))
+        if (state?.context_pack) return state.context_pack
+      } catch {
+        /* corrupt active.json: fall through to the event log, as packs.py does */
+      }
+    }
     const path = join(root, CF_DIR, "history", "pack-events.jsonl")
     if (!existsSync(path)) return null
     const lines = readFileSync(path, "utf-8").trim().split("\n").filter(Boolean)
@@ -77,7 +87,8 @@ function activePackName(root: string): string | null {
     for (const line of lines) {
       try {
         const ev = JSON.parse(line)
-        if (ev.event === "primed") last = ev.context_pack
+        if ((ev.event === "activated" || ev.event === "primed") && ev.context_pack) last = ev.context_pack
+        else if (ev.event === "deactivated") last = null
       } catch {
         /* skip malformed line, append-only log should never need rewriting to fix this */
       }
@@ -137,8 +148,10 @@ type ShellResult = { ok: boolean; text: string }
 async function runShell(shell: PluginInput["$"], root: string, cmd: ReturnType<PluginInput["$"]>): Promise<ShellResult> {
   try {
     const result = await cmd.cwd(root).nothrow().quiet()
-    const text = await result.text()
-    return { ok: result.exitCode === 0, text }
+    const stdout = await result.text()
+    // Keep stderr: Python tracebacks land there, and dropping it logged empty failure messages.
+    const stderr = result.stderr?.toString() ?? ""
+    return { ok: result.exitCode === 0, text: [stdout, stderr].filter((s) => s.trim()).join("\n") }
   } catch (e) {
     warn(root, `auto-mode shell command failed: ${e}`)
     return { ok: false, text: String(e) }

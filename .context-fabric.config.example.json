@@ -1,0 +1,9 @@
+{
+  "auto": true,
+  "backend": "auto",
+  "context": {
+    "target_prefix_tokens": 32000,
+    "source_budget_tokens": 18000,
+    "working_context_tokens": 64000
+  }
+}
