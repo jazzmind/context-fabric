@@ -1,0 +1,28 @@
+{
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
+  "mcpServers": {
+    "specguard-mcp": {
+      "command": "npx",
+      "args": [
+        "specguard-mcp"
+      ]
+    }
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"$(cat | sed -n 's/.*\"file_path\"[: ]*\"\\([^\"]*\\)\".*/\\1/p')\"; case \"$f\" in *\"/specs/\"*|*\"/tests/\"*|*\"/.specguard/\"*) exit 0;; esac; npx specguard status 2>/dev/null | tail -3 || true"
+          }
+        ]
+      }
+    ]
+  },
+  "includeCoAuthoredBy": false
+}
