@@ -414,4 +414,14 @@ export const ContextFabricPlugin: Plugin = async (ctx) => {
   }
 }
 
-export default ContextFabricPlugin
+// opencode v2 loads plugin modules as an object with an `id` plus `setup` (and/or
+// `effect`) — a bare function default export is rejected at load
+// (PluginModule.LoadError: "Expected object at [default]", then
+// "Missing key at default.effect / default.setup"). The V1-style hook function is
+// the `server` export; the no-op `setup` satisfies the module schema. v2.1.4
+// verified. See docs/opencode-v2.1.4.md.
+export default {
+  id: "context-fabric",
+  server: ContextFabricPlugin,
+  setup: async () => {},
+}

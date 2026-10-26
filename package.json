@@ -9,8 +9,8 @@
     "test": "python3 -m unittest discover -s tests -p \"test_*.py\""
   },
   "devDependencies": {
-    "@opencode-ai/plugin": "latest",
-    "typescript": "^5.5.0",
-    "@types/node": "^20.0.0"
+    "@opencode-ai/plugin": "^1.19.4",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.5.0"
   }
 }
